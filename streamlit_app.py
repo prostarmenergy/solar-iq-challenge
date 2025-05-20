@@ -18,6 +18,13 @@ st.markdown("""
     <link href="https://fonts.googleapis.com/css2?family=Poppins&display=swap" rel="stylesheet">
 """, unsafe_allow_html=True)
 
+# Disclaimer
+st.markdown("""
+<div style='font-size: 0.9em; color: gray;'>
+<b>Disclaimer:</b> This application is intended for educational and experimentation purposes only. The results presented are based on estimations and may not reflect actual electricity bills or solar performance.
+</div>
+""", unsafe_allow_html=True)
+
 # Sidebar Navigation
 st.sidebar.title("🔆 Navigate")
 page = st.sidebar.radio("Go to", ["Round 1: Solar Basics", "Round 2: Impact Estimator"])
@@ -79,61 +86,72 @@ if page == "Round 1: Solar Basics":
 # ROUND 2
 if page == "Round 2: Impact Estimator" or st.session_state.go_to_round2:
     st.title("⚡ Round 2: Your Energy Impact")
-    st.write("Simulate the solar, grid, and battery energy flow through your day.")
+    st.write("Simulate the solar, grid, and export energy flows through a typical Indian day.")
+
+    st.markdown("**🏠 Choose Consumer Type:**")
+    user_type = st.radio("Tariff Category", ["Residential", "Commercial"], horizontal=True)
 
     st.markdown("**🔧 Input your solar setup & daily profile:**")
-    battery_capacity = st.slider("Battery Capacity (kWh)", 1, 20, 5)
-    load_demand = st.slider("Daily Load Demand (kWh)", 1, 50, 20)
-    solar_capacity = st.slider("Installed Solar (kW)", 1, 20, 5)
+    load_units = st.slider("Estimated Daily Load (Units)", 5, 50, 15)
+    solar_capacity = st.slider("Installed Solar PV Capacity (kW)", 1, 20, 5)
 
     hours = np.arange(0, 24)
-    sunlight_hours = np.logical_and(hours >= 6, hours <= 18)
-    solar_generation = np.where(sunlight_hours, solar_capacity * np.sin((np.pi / 12) * (hours - 6)), 0)
-    load_profile = np.where((hours >= 6) & (hours < 22), load_demand / 16, load_demand / 8)
 
-    battery_state = []
-    battery_level = 0
-    battery_use = []
-    grid_use = []
-    export_to_grid = []
+    # Load profile (Indian trend)
+    load_profile = np.array([
+        0.8, 0.6, 0.4, 0.4, 0.6, 1.2, 2.0, 2.0, 1.5, 1.2, 1.2, 1.0,
+        0.8, 0.8, 1.0, 1.2, 2.2, 2.5, 2.0, 1.6, 1.4, 1.0, 0.8, 0.6
+    ])
+    load_profile = (load_profile / load_profile.sum()) * load_units
 
-    for s_gen, l_use in zip(solar_generation, load_profile):
-        surplus = s_gen - l_use
-        if surplus >= 0:
-            charge = min(surplus, battery_capacity - battery_level)
-            battery_level += charge
-            export = surplus - charge
-            battery_use.append(0)
-            grid_use.append(0)
-            export_to_grid.append(export)
-        else:
-            needed = abs(surplus)
-            discharge = min(needed, battery_level)
-            battery_level -= discharge
-            battery_use.append(discharge)
-            grid_use.append(needed - discharge)
-            export_to_grid.append(0)
-        battery_state.append(battery_level)
+    # Solar generation (bell curve between 6am–6pm)
+    solar_generation = np.where(
+        (hours >= 6) & (hours <= 18),
+        solar_capacity * np.clip(np.sin((np.pi / 12) * (hours - 6)), 0, 1),
+        0
+    )
+
+    # Energy flows
+    export_to_grid = np.maximum(solar_generation - load_profile, 0)
+    grid_use = np.maximum(load_profile - solar_generation, 0)
 
     fig, ax = plt.subplots(figsize=(12, 5))
-    ax.stackplot(hours, load_profile, solar_generation, battery_use, grid_use, export_to_grid,
-                 labels=["Load Demand", "Solar Generation", "Battery Discharge", "Grid Usage", "Export to Grid"],
-                 colors=["#444", "#f9a825", "#43a047", "#1976d2", "#c0f52f"])
+    ax.plot(hours, load_profile, label="Load Demand (Units)", color="#444", linewidth=2)
+    ax.plot(hours, solar_generation, label="Solar Generation (Units)", color="#f9a825", linewidth=2)
+    ax.fill_between(hours, 0, export_to_grid, label="Export to Grid", color="#c0f52f", alpha=0.4)
+    ax.fill_between(hours, 0, grid_use, label="Grid Usage", color="#1976d2", alpha=0.3)
     ax.set_xlabel("Hour of Day")
-    ax.set_ylabel("Power (kW)")
-    ax.set_title("Solar - Grid - Battery (Hybrid) Energy Flow")
+    ax.set_ylabel("Units")
+    ax.set_title("Energy Profile: Load vs. Solar vs. Grid")
     ax.legend(loc="upper right")
     st.pyplot(fig)
 
-    # Quiz element based on graph
+    # Estimated cost calculation
+    def calculate_cost(units, category):
+        if category == "Residential":
+            if units <= 100:
+                return units * 3.5
+            elif units <= 300:
+                return 100 * 3.5 + (units - 100) * 5.5
+            else:
+                return 100 * 3.5 + 200 * 5.5 + (units - 300) * 7.5
+        else:
+            return units * 9.0
+
+    daily_grid_units = grid_use.sum()
+    daily_cost = calculate_cost(daily_grid_units, user_type)
+    st.metric("Estimated Daily Grid Consumption", f"{daily_grid_units:.2f} Units")
+    st.metric("Estimated Daily Cost (₹)", f"₹{daily_cost:.2f}")
+
+    # Quiz element based on export
     st.markdown("### 🤔 Bonus Question")
-    guess_export = st.slider("Based on your setup, how much power (kW) do you think was exported to the grid at peak solar hour (12 PM)?", 0.0, float(solar_capacity), 0.0, step=0.1)
+    guess_export = st.slider("How much power (Units) was exported at 12 PM?", 0.0, float(solar_capacity), 0.0, step=0.1)
     actual_export = round(export_to_grid[12], 2)
     if st.button("🎯 Submit Guess"):
         if abs(guess_export - actual_export) <= 0.5:
-            st.success(f"🎉 Spot on! Actual export at 12 PM was {actual_export} kW.")
+            st.success(f"🎉 Spot on! Export at 12 PM was {actual_export} Units.")
         else:
-            st.error(f"❌ Close, but not quite. Actual export at 12 PM was {actual_export} kW.")
+            st.error(f"❌ Not quite. Export at 12 PM was {actual_export} Units.")
 
     # Always show Learn More CTA
     st.markdown("""
